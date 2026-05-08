@@ -1,0 +1,8 @@
+output/
+glslviewer-out/
+generated/glb_images/
+
+debug-*.frag
+generated/*.pgm
+generated/*.ppm
+__pycache__/

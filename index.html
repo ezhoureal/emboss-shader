@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dynamic Emboss Height Shader</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #b8b8b8;
+      font-family: system-ui, sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    .panel {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      width: min(320px, calc(100vw - 32px));
+      padding: 12px;
+      background: rgba(245, 245, 245, 0.88);
+      border: 1px solid rgba(80, 80, 80, 0.18);
+      border-radius: 8px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.14);
+      color: #252525;
+      font-size: 13px;
+    }
+
+    .status {
+      margin-top: 8px;
+      color: #555;
+      min-height: 16px;
+    }
+
+    label {
+      display: grid;
+      grid-template-columns: 92px 1fr 42px;
+      gap: 10px;
+      align-items: center;
+      margin: 8px 0;
+    }
+
+    input[type="range"] {
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="panel">
+    <label>
+      Height
+      <input id="height" type="range" min="0" max="3" step="0.01" value="2.45">
+      <span id="heightValue">2.45</span>
+    </label>
+    <label>
+      Radius
+      <input id="radius" type="range" min="0.03" max="0.45" step="0.01" value="0.22">
+      <span id="radiusValue">0.22</span>
+    </label>
+    <div id="status" class="status">Loading height maps...</div>
+  </div>
+
+  <script id="vs" type="x-shader/x-vertex">
+    attribute vec2 aPosition;
+    varying vec2 vUv;
+
+    void main() {
+      vUv = aPosition * 0.5 + 0.5;
+      gl_Position = vec4(aPosition, 0.0, 1.0);
+    }
+  </script>
+
+  <script id="fs" type="x-shader/x-fragment">
+    precision highp float;
+
+    varying vec2 vUv;
+    uniform sampler2D uHeightMap;
+    uniform sampler2D uMaskMap;
+    uniform vec2 uResolution;
+    uniform vec2 uPosition;
+    uniform float uH;
+    uniform float uRadius;
+
+    float embossMask(vec2 uv) {
+      return texture2D(uMaskMap, uv).r;
+    }
+
+    float boostedHeight(vec2 uv, vec2 screenUv) {
+      float base = texture2D(uHeightMap, uv).r * embossMask(uv);
+      vec2 aspect = vec2(uResolution.x / uResolution.y, 1.0);
+      float d = distance(screenUv * aspect, uPosition * aspect);
+      float local = smoothstep(uRadius, 0.0, d);
+      local = local * local * (3.0 - 2.0 * local);
+
+      return base * (0.55 + uH * local);
+    }
+
+    vec3 normalFromHeight(vec2 uv, vec2 screenUv) {
+      vec2 texel = 1.0 / uResolution;
+      float hL = boostedHeight(uv - vec2(texel.x, 0.0), screenUv - vec2(texel.x, 0.0));
+      float hR = boostedHeight(uv + vec2(texel.x, 0.0), screenUv + vec2(texel.x, 0.0));
+      float hD = boostedHeight(uv - vec2(0.0, texel.y), screenUv - vec2(0.0, texel.y));
+      float hU = boostedHeight(uv + vec2(0.0, texel.y), screenUv + vec2(0.0, texel.y));
+      return normalize(vec3((hL - hR) * 8.5, (hD - hU) * 8.5, 1.0));
+    }
+
+    void main() {
+      vec2 screenUv = vUv;
+      vec2 uv = screenUv;
+      uv.x *= uResolution.x / uResolution.y;
+
+      vec3 n = normalFromHeight(uv, screenUv);
+      vec3 light = normalize(vec3(-0.48, 0.58, 0.70));
+      float diffuse = dot(n, light) * 0.5 + 0.5;
+      float rim = pow(1.0 - max(dot(n, vec3(0.0, 0.0, 1.0)), 0.0), 1.7);
+      float relief = boostedHeight(uv, screenUv);
+
+      vec3 paper = vec3(0.70);
+      vec3 color = paper * (0.74 + diffuse * 0.34);
+      color += vec3(0.34) * rim;
+      color -= vec3(0.24) * relief * (1.0 - diffuse);
+      color = mix(vec3(0.0), color, smoothstep(0.10, 0.55, embossMask(uv)));
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  </script>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const gl = canvas.getContext('webgl');
+    const status = document.getElementById('status');
+    const height = document.getElementById('height');
+    const radius = document.getElementById('radius');
+    const heightValue = document.getElementById('heightValue');
+    const radiusValue = document.getElementById('radiusValue');
+    let pointer = [0.58, 0.48];
+    let loadedTextures = 0;
+
+    if (!gl) {
+      status.textContent = 'WebGL is unavailable in this browser.';
+      throw new Error('WebGL unavailable');
+    }
+
+    function shader(type, source) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, source);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(s));
+      }
+      return s;
+    }
+
+    const program = gl.createProgram();
+    gl.attachShader(program, shader(gl.VERTEX_SHADER, document.getElementById('vs').textContent));
+    gl.attachShader(program, shader(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(program));
+    }
+    gl.useProgram(program);
+
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+
+    const aPosition = gl.getAttribLocation(program, 'aPosition');
+    gl.enableVertexAttribArray(aPosition);
+    gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);
+
+    const uniforms = {
+      heightMap: gl.getUniformLocation(program, 'uHeightMap'),
+      maskMap: gl.getUniformLocation(program, 'uMaskMap'),
+      resolution: gl.getUniformLocation(program, 'uResolution'),
+      position: gl.getUniformLocation(program, 'uPosition'),
+      h: gl.getUniformLocation(program, 'uH'),
+      radius: gl.getUniformLocation(program, 'uRadius')
+    };
+
+    function createTexture(unit, url, fallback) {
+      const texture = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        1,
+        1,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array(fallback)
+      );
+
+      const image = new Image();
+      image.onload = () => {
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        loadedTextures += 1;
+        status.textContent = loadedTextures === 2 ? 'Move pointer to raise the emboss.' : 'Loading height maps...';
+      };
+      image.onerror = () => {
+        status.textContent = `Could not load ${url}. Use a local server from this folder.`;
+      };
+      image.src = url;
+      return texture;
+    }
+
+    createTexture(0, 'generated/baroque_height.png', [180, 180, 180, 255]);
+    createTexture(1, 'generated/baroque_mask.png', [255, 255, 255, 255]);
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.floor(canvas.clientWidth * dpr);
+      const h = Math.floor(canvas.clientHeight * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+
+    function setPointer(event) {
+      const r = canvas.getBoundingClientRect();
+      pointer = [
+        (event.clientX - r.left) / r.width,
+        1 - (event.clientY - r.top) / r.height
+      ];
+    }
+
+    canvas.addEventListener('pointermove', setPointer);
+    canvas.addEventListener('pointerdown', setPointer);
+
+    function frame(time) {
+      resize();
+      heightValue.textContent = Number(height.value).toFixed(2);
+      radiusValue.textContent = Number(radius.value).toFixed(2);
+      gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+      gl.uniform2f(uniforms.position, pointer[0], pointer[1]);
+      gl.uniform1f(uniforms.h, Number(height.value));
+      gl.uniform1f(uniforms.radius, Number(radius.value));
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      requestAnimationFrame(frame);
+    }
+
+    gl.uniform1i(uniforms.heightMap, 0);
+    gl.uniform1i(uniforms.maskMap, 1);
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

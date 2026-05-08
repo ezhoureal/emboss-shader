@@ -1,0 +1,25 @@
+{
+  "source": "baroque_wall.glb",
+  "resolution": [
+    1024,
+    1024
+  ],
+  "projection": "x/z plane",
+  "height_axis": "y",
+  "position_min": [
+    -0.42203599214553833,
+    -0.04282199963927269,
+    -0.8487989902496338
+  ],
+  "position_max": [
+    0.4259440004825592,
+    0.01023900043219328,
+    0
+  ],
+  "height_normalization": [
+    0.16922527551651,
+    0.9814666509628296
+  ],
+  "vertex_count": 921360,
+  "triangle_count": 1496740
+}
